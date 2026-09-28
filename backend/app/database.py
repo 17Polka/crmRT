@@ -11,8 +11,11 @@ from sqlalchemy.orm import DeclarativeBase
 
 DEFAULT_SQLITE_URL = "sqlite+aiosqlite:///./crmrt.db"
 
-# Если указан DATABASE_URL, используем его, иначе SQLite по умолчанию
 DATABASE_URL: str = os.getenv("DATABASE_URL", DEFAULT_SQLITE_URL)
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+asyncpg://", 1)
+elif DATABASE_URL.startswith("postgresql://") and not DATABASE_URL.startswith("postgresql+asyncpg://"):
+    DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
 
 engine_kwargs = {"echo": False}
 if DATABASE_URL.startswith("postgresql"):
