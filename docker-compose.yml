@@ -1,0 +1,45 @@
+version: '3.8'
+
+services:
+  crm-backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: crmrt-app
+    restart: always
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://crm:secret@postgres:5432/crmrt
+      - SECRET_KEY=super_secret_crm_key_rostelecom_2026
+      - KEYCLOAK_ENABLED=false
+      - CORS_ORIGINS=*
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./backend/uploads:/app/uploads
+      - ./head.html:/app/head.html
+      - ./css_styles.css:/app/css_styles.css
+      - ./logic.js:/app/logic.js
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: crmrt-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: crm
+      POSTGRES_PASSWORD: secret
+      POSTGRES_DB: crmrt
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U crm -d crmrt"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:

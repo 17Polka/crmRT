@@ -445,6 +445,11 @@ async def update_university(
     for k, v in changes.items():
         setattr(obj, k, v)
 
+    if "manager_id" in changes and changes["manager_id"]:
+        mgr = await db.get(User, changes["manager_id"])
+        if mgr:
+            obj.manager_fio = mgr.full_name
+
     await write_audit(
         db, action=AuditAction.catalog_updated,
         user=current_user, resource_type="university", resource_id=uni_id,
@@ -580,3 +585,26 @@ async def import_universities_xlsx(
         ok=True, created=created, updated=updated,
         skipped=skipped, errors=errors,
     )
+
+
+@router.get("/managers", summary="Список ответственных менеджеров")
+async def list_managers(
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(require_manager),
+):
+    stmt = (
+        select(User)
+        .where(User.is_active == True, User.is_blocked == False)
+        .order_by(User.full_name)
+    )
+    users = (await db.scalars(stmt)).all()
+    return [
+        {
+            "id": u.id,
+            "username": u.username,
+            "full_name": u.full_name,
+            "role": u.role.value,
+            "email": u.email,
+        }
+        for u in users
+    ]

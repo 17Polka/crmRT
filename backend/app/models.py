@@ -1,13 +1,17 @@
 """
-models.py — ORM-модели для разделов «Каталоги данных» и «Безопасность и compliance».
+models.py — ORM-модели для CRM ИТ Школы Ростелекома.
 
 Таблицы:
-  • users          — пользователи CRM (менеджеры, руководители, администраторы)
-  • directions     — направления (ИТ-продукты / сегменты)
-  • products       — ИТ-продукты Ростелекома
-  • universities   — базовая ссылочная таблица на вузы-партнёры
-  • audit_log      — лог действий (ФЗ-152, ФЗ-117, Keycloak-события)
-  • blocked_tokens — таблица отозванных JWT (logout / блокировка)
+  • users                  — пользователи CRM (КАМ, Руководитель, Администратор)
+  • directions             — каталоги: направления обучения
+  • products               — каталоги: ИТ-продукты
+  • universities           — каталоги: вузы-партнеры
+  • workflow_stages        — этапы workflow (14 базовых + кастомные)
+  • university_workflows   — статус взаимодействия вуза с продуктом и этапом
+  • workflow_history       — история переходов, комментарии и дедлайны
+  • attachments            — прикрепленные файлы (документы, лицензии)
+  • audit_log              — лог безопасности (ФЗ-152, ФСТЭК №117)
+  • blocked_tokens         — черный список JWT
 """
 import enum
 import uuid
@@ -23,7 +27,6 @@ from sqlalchemy import (
     Text,
     func,
 )
-from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -34,13 +37,12 @@ from app.database import Base
 # ---------------------------------------------------------------------------
 
 class UserRole(str, enum.Enum):
-    manager = "manager"   # менеджер по вузам (КАМ)
-    head    = "head"      # руководитель — видит всё
-    admin   = "admin"     # администратор — управляет системой
+    manager = "manager"   # Менеджер (КАМ)
+    head    = "head"      # Руководитель
+    admin   = "admin"     # Администратор
 
 
 class AuditAction(str, enum.Enum):
-    # Безопасность / compliance
     login            = "LOGIN"
     logout           = "LOGOUT"
     login_failed     = "LOGIN_FAILED"
@@ -49,12 +51,11 @@ class AuditAction(str, enum.Enum):
     user_unblocked   = "USER_UNBLOCKED"
     role_changed     = "ROLE_CHANGED"
     password_changed = "PASSWORD_CHANGED"
-    # Каталоги
     catalog_created  = "CATALOG_CREATED"
     catalog_updated  = "CATALOG_UPDATED"
     catalog_deleted  = "CATALOG_DELETED"
     catalog_imported = "CATALOG_IMPORTED"
-    # Данные
+    workflow_transition = "WORKFLOW_TRANSITION"
     data_export      = "DATA_EXPORT"
     data_access      = "DATA_ACCESS"
 
@@ -66,26 +67,22 @@ class AuditAction(str, enum.Enum):
 class User(Base):
     __tablename__ = "users"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
     )
     keycloak_sub: Mapped[str | None] = mapped_column(
         String(255), unique=True, nullable=True,
-        comment="Keycloak subject (sub) claim — внешний IdP"
+        comment="Keycloak subject (sub)"
     )
     username: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     full_name: Mapped[str] = mapped_column(String(255), nullable=False)
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
-    # Хэш пароля нужен только для режима без Keycloak (dev / fallback)
     hashed_password: Mapped[str | None] = mapped_column(String(255), nullable=True)
     role: Mapped[UserRole] = mapped_column(
         Enum(UserRole, name="user_role"), nullable=False, default=UserRole.manager
     )
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    is_blocked: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=False,
-        comment="ФЗ-152: временная блокировка при инциденте"
-    )
+    is_blocked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -99,11 +96,10 @@ class User(Base):
 
 
 # ---------------------------------------------------------------------------
-# Каталог: направления
+# Каталоги: Направления
 # ---------------------------------------------------------------------------
 
 class Direction(Base):
-    """Направление — группировка продуктов (напр. «Облака», «Безопасность»)."""
     __tablename__ = "directions"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -123,11 +119,10 @@ class Direction(Base):
 
 
 # ---------------------------------------------------------------------------
-# Каталог: продукты
+# Каталоги: Продукты
 # ---------------------------------------------------------------------------
 
 class Product(Base):
-    """ИТ-продукт Ростелекома, привязанный к направлению."""
     __tablename__ = "products"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -151,38 +146,38 @@ class Product(Base):
 
 
 # ---------------------------------------------------------------------------
-# Каталог: вузы-партнёры
+# Каталоги: Вузы
 # ---------------------------------------------------------------------------
 
 class University(Base):
-    """
-    Справочник вузов-партнёров (карточка учебного заведения).
-    История взаимодействий, этапы workflow и вложенные файлы
-    хранятся в смежном сервисе — данная модель содержит только
-    базовые реквизиты вуза.
-    """
     __tablename__ = "universities"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(512), unique=True, nullable=False)
     short_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
     city: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    inn: Mapped[str | None] = mapped_column(
-        String(12), nullable=True, comment="ИНН юридического лица"
-    )
-    licence_year: Mapped[int | None] = mapped_column(
-        Integer, nullable=True, comment="Год истечения лицензии"
-    )
+    inn: Mapped[str | None] = mapped_column(String(12), nullable=True)
+    vendor: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    software: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    contract_number: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    licence_signed: Mapped[bool] = mapped_column(Boolean, default=False)
+    licence_year: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    transfer_status: Mapped[str | None] = mapped_column(String(128), nullable=True, default="Не передано")
+    manager_fio: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    university_contacts: Mapped[str | None] = mapped_column(Text, nullable=True)
+    comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     direction_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("directions.id", ondelete="SET NULL"), nullable=True
     )
     product_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("products.id", ondelete="SET NULL"), nullable=True
     )
-    # Ответственный менеджер
-    manager_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    manager_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
+
+    current_stage_order: Mapped[int] = mapped_column(Integer, default=0)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
@@ -193,34 +188,83 @@ class University(Base):
 
 
 # ---------------------------------------------------------------------------
-# Безопасность: аудит-лог
+# Workflow: Этапы (14 базовых по ТЗ + кастомные)
+# ---------------------------------------------------------------------------
+
+class WorkflowStage(Base):
+    __tablename__ = "workflow_stages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    order: Mapped[int] = mapped_column(Integer, nullable=False, unique=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    category: Mapped[str | None] = mapped_column(String(64), nullable=True, default="Общий")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+# ---------------------------------------------------------------------------
+# Workflow: История переходов, комментарии
+# ---------------------------------------------------------------------------
+
+class WorkflowHistory(Base):
+    __tablename__ = "workflow_history"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    university_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("universities.id", ondelete="CASCADE"), nullable=False
+    )
+    user_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    user_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    from_stage: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    to_stage: Mapped[int] = mapped_column(Integer, nullable=False)
+    comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    action_type: Mapped[str] = mapped_column(String(32), default="transition") # transition, comment, file
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+# ---------------------------------------------------------------------------
+# Вложения / Файлы (п. 3 функциональных требований)
+# ---------------------------------------------------------------------------
+
+class Attachment(Base):
+    __tablename__ = "attachments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    university_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("universities.id", ondelete="CASCADE"), nullable=False
+    )
+    stage_order: Mapped[int] = mapped_column(Integer, nullable=False)
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    stored_path: Mapped[str] = mapped_column(String(512), nullable=False)
+    file_size: Mapped[int] = mapped_column(Integer, default=0)
+    mime_type: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    uploaded_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+# ---------------------------------------------------------------------------
+# Безопасность: Аудит-лог (152-ФЗ, ФСТЭК №117)
 # ---------------------------------------------------------------------------
 
 class AuditLog(Base):
-    """
-    Неизменяемый журнал действий пользователей.
-    Требования: ФЗ-152 ст.19, ФЗ-117 (защита информации).
-    Запись не удаляется и не изменяется — только INSERT.
-    """
     __tablename__ = "audit_log"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    user_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     action: Mapped[AuditAction] = mapped_column(
         Enum(AuditAction, name="audit_action"), nullable=False
     )
-    resource_type: Mapped[str | None] = mapped_column(
-        String(64), nullable=True,
-        comment="Тип ресурса: direction / product / university / user"
-    )
-    resource_id: Mapped[str | None] = mapped_column(
-        String(64), nullable=True, comment="ID изменённого объекта"
-    )
-    detail: Mapped[str | None] = mapped_column(
-        Text, nullable=True, comment="JSON-diff или произвольное описание"
-    )
+    resource_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    resource_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    detail: Mapped[str | None] = mapped_column(Text, nullable=True)
     ip_address: Mapped[str | None] = mapped_column(String(45), nullable=True)
     user_agent: Mapped[str | None] = mapped_column(String(512), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -233,27 +277,19 @@ class AuditLog(Base):
 
 
 # ---------------------------------------------------------------------------
-# Безопасность: отозванные токены (logout / блокировка пользователя)
+# Безопасность: Отозванные токены
 # ---------------------------------------------------------------------------
 
 class BlockedToken(Base):
-    """
-    Blacklist JTI (JWT Token ID) для реализации безопасного logout
-    и мгновенной блокировки пользователя.
-    Устаревшие записи чистятся планировщиком (expire_at < now()).
-    """
     __tablename__ = "blocked_tokens"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     jti: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
-    user_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), nullable=True
-    )
+    user_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     revoked_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
     expire_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False,
-        comment="Время истечения токена — для автоочистки"
+        DateTime(timezone=True), nullable=False
     )
     reason: Mapped[str | None] = mapped_column(String(255), nullable=True)

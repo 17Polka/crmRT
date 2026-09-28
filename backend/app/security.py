@@ -186,11 +186,8 @@ async def get_current_user(
         if user is None:
             raise HTTPException(status_code=404, detail="Пользователь не найден в CRM.")
     else:
-        try:
-            uid = uuid.UUID(user_id_raw)
-        except (ValueError, TypeError):
-            raise HTTPException(status_code=401, detail="Некорректный UID в токене.")
-        user = await db.get(User, uid)
+        uid = str(user_id_raw)
+        user = await db.scalar(select(User).where(User.id == uid))
 
     if user is None:
         raise HTTPException(status_code=401, detail="Пользователь не найден.")

@@ -1,19 +1,27 @@
 """
 database.py — SQLAlchemy async engine + session factory.
 
-DATABASE_URL берётся из .env:
-  DATABASE_URL=postgresql+asyncpg://crm:secret@localhost:5432/crmrt
+Поддерживает:
+1. PostgreSQL (production) через asyncpg
+2. SQLite (local development / standalone fallback) через aiosqlite
 """
 import os
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from sqlalchemy.orm import DeclarativeBase
 
-DATABASE_URL: str = os.getenv(
-    "DATABASE_URL",
-    "postgresql+asyncpg://crm:secret@localhost:5432/crmrt",
-)
+DEFAULT_SQLITE_URL = "sqlite+aiosqlite:///./crmrt.db"
 
-engine = create_async_engine(DATABASE_URL, echo=False, pool_pre_ping=True)
+# Если указан DATABASE_URL, используем его, иначе SQLite по умолчанию
+DATABASE_URL: str = os.getenv("DATABASE_URL", DEFAULT_SQLITE_URL)
+
+engine_kwargs = {"echo": False}
+if DATABASE_URL.startswith("postgresql"):
+    engine_kwargs["pool_pre_ping"] = True
+elif DATABASE_URL.startswith("sqlite"):
+    # SQLite не поддерживает pool_pre_ping в таком виде
+    pass
+
+engine = create_async_engine(DATABASE_URL, **engine_kwargs)
 
 AsyncSessionLocal = async_sessionmaker(
     engine,

@@ -350,12 +350,105 @@ tr.c:hover {
   gap: 12px;
 }
 
-@media (max-width: 600px) {
+@media (max-width: 768px) {
   h1 {
-    font-size: 23px;
+    font-size: 22px;
+    margin-bottom: 12px;
+  }
+
+  h2 {
+    font-size: 16px;
+  }
+
+  header {
+    padding: 8px 12px;
+    gap: 8px;
+  }
+
+  .logo {
+    font-size: 18px;
+  }
+
+  nav {
+    order: 3;
+    width: 100%;
+    margin-top: 2px;
+    padding-bottom: 4px;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+
+  nav::-webkit-scrollbar {
+    display: none;
+  }
+
+  nav a {
+    padding: 6px 12px;
+    font-size: 13px;
   }
 
   main {
-    padding: 16px 12px;
+    padding: 12px 10px 48px;
+  }
+
+  .cd {
+    padding: 14px;
+    border-radius: 16px;
+  }
+
+  .gr {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+  }
+
+  .k {
+    font-size: 24px;
+  }
+
+  .fl {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .fl > * {
+    width: 100%;
+    min-width: unset;
+  }
+
+  /* Канбан в виде горизонтального touch-свайпа на мобильных */
+  .kb {
+    display: flex;
+    overflow-x: auto;
+    scroll-snap-type: x mandatory;
+    gap: 12px;
+    padding-bottom: 14px;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .col {
+    flex: 0 0 82vw;
+    max-width: 320px;
+    scroll-snap-align: start;
+  }
+
+  .b {
+    min-height: 40px;
+  }
+
+  .mo {
+    padding: 0;
+    align-items: flex-end;
+  }
+
+  .mo .cd {
+    border-radius: 20px 20px 0 0;
+    max-height: 90vh;
+    overflow-y: auto;
+    padding-bottom: calc(20px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .lg {
+    margin: 2vh auto;
+    padding: 18px;
   }
 }

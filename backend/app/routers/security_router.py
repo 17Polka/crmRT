@@ -126,7 +126,7 @@ async def login(
     await db.commit()
 
     ttl_seconds = int((expire_at - datetime.now(timezone.utc)).total_seconds())
-    return TokenOut(access_token=token, expires_in=ttl_seconds)
+    return TokenOut(access_token=token, expires_in=ttl_seconds, user=UserOut.model_validate(user))
 
 
 @router.post("/logout", response_model=MessageResponse, summary="Выйти (отозвать токен)")
@@ -246,7 +246,7 @@ async def create_user(
 
 @router.get("/users/{user_id}", response_model=UserOut, summary="Карточка пользователя")
 async def get_user(
-    user_id: uuid.UUID,
+    user_id: str,
     db: AsyncSession = Depends(get_db),
     _: User = Depends(require_head),
 ):
@@ -258,7 +258,7 @@ async def get_user(
 
 @router.put("/users/{user_id}", response_model=UserOut, summary="Обновить пользователя")
 async def update_user(
-    user_id: uuid.UUID,
+    user_id: str,
     body: UserUpdate,
     request: Request,
     db: AsyncSession = Depends(get_db),
@@ -291,7 +291,7 @@ async def update_user(
 @router.post("/users/{user_id}/block", response_model=MessageResponse,
              summary="Заблокировать пользователя (ФЗ-152)")
 async def block_user(
-    user_id: uuid.UUID,
+    user_id: str,
     request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_admin),
@@ -316,7 +316,7 @@ async def block_user(
 @router.post("/users/{user_id}/unblock", response_model=MessageResponse,
              summary="Разблокировать пользователя")
 async def unblock_user(
-    user_id: uuid.UUID,
+    user_id: str,
     request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_admin),
@@ -337,14 +337,14 @@ async def unblock_user(
 
 
 # ===========================================================================
-# AUDIT LOG
+# AUDIT LOG (Только Руководитель и Администратор, КАМ доступа не имеет)
 # ===========================================================================
 
 @router.get("/audit", response_model=PagedResponse, summary="Журнал аудита (ФЗ-152 / ФЗ-117)")
 async def list_audit(
     page: int = Query(1, ge=1),
     page_size: int = Query(100, ge=1, le=500),
-    user_id: Optional[uuid.UUID] = None,
+    user_id: Optional[str] = None,
     action: Optional[AuditAction] = None,
     resource_type: Optional[str] = None,
     date_from: Optional[str] = Query(None, description="ISO date: 2026-09-01"),
@@ -375,7 +375,7 @@ async def list_audit(
 
     # Подгружаем username
     items_out = []
-    user_cache: dict[uuid.UUID, str] = {}
+    user_cache: dict[str, str] = {}
     for log in rows:
         out = AuditLogOut.model_validate(log)
         if log.user_id:
@@ -421,7 +421,7 @@ async def export_audit_xlsx(
                "Тип ресурса", "ID ресурса", "Детали", "IP"]
     ws.append(headers)
 
-    user_cache: dict[uuid.UUID, str] = {}
+    user_cache: dict[str, str] = {}
     for log in rows:
         username = ""
         if log.user_id:

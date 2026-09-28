@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.env
+
+# Binaries & Archives
+*.exe
+*.bat
+*.cmd
+*.zip
+*.tar.gz
+
+# OS generated
+Thumbs.db
+Desktop.ini
+.DS_Store
+
