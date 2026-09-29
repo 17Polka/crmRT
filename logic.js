@@ -85,9 +85,9 @@ const NAV = [
   ["vuzes", "Вузы", 0],
   ["workflow", "Workflow", 0],
   ["reports", "Отчёты", 0],
-  ["catalogs", "Каталоги", 1],
-  ["integ", "Интеграции", 2],
-  ["admin", "Администрирование", 1],
+  ["catalogs", "Каталоги", 0],
+  ["integ", "Интеграции", 0],
+  ["admin", "Администрирование", 0],
   ["docs", "Справка", 0]
 ];
 
@@ -1171,12 +1171,10 @@ function workflowView() {
   return `
     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:12px">
       <h1 style="margin:0">Канбан Workflow (${STAGES.length} этапов)</h1>
-      ${ROLES[role] >= 1 ? `
-        <div style="display:flex;gap:8px">
-          <button class="b" onclick="openAddStageModal()">Добавить этап</button>
-          <button class="b g" onclick="openManageStagesModal()">Настройка этапов</button>
-        </div>
-      ` : ""}
+      <div style="display:flex;gap:8px">
+        <button class="b" onclick="openAddStageModal()">Добавить этап</button>
+        <button class="b g" onclick="openManageStagesModal()">Настройка этапов</button>
+      </div>
     </div>
     ${controlBlock}
     <div class="kb">

@@ -115,24 +115,30 @@ if not os.path.exists(os.path.join(FRONTEND_DIR, "head.html")):
             FRONTEND_DIR = cand
             break
 
+NO_CACHE_HEADERS = {
+    "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
+    "Pragma": "no-cache",
+    "Expires": "0",
+}
+
 @app.get("/", summary="Главная страница CRM")
 async def index():
     index_path = os.path.join(FRONTEND_DIR, "head.html")
     if os.path.exists(index_path):
-        return FileResponse(index_path)
+        return FileResponse(index_path, headers=NO_CACHE_HEADERS)
     return {"message": "CRM API backend is running"}
 
 @app.get("/head.html", summary="Главная страница CRM")
 async def head_html():
-    return FileResponse(os.path.join(FRONTEND_DIR, "head.html"))
+    return FileResponse(os.path.join(FRONTEND_DIR, "head.html"), headers=NO_CACHE_HEADERS)
 
 @app.get("/css_styles.css", summary="Стили интерфейса")
 async def css_styles():
-    return FileResponse(os.path.join(FRONTEND_DIR, "css_styles.css"), media_type="text/css")
+    return FileResponse(os.path.join(FRONTEND_DIR, "css_styles.css"), media_type="text/css", headers=NO_CACHE_HEADERS)
 
 @app.get("/logic.js", summary="Скрипт логики интерфейса")
 async def logic_js():
-    return FileResponse(os.path.join(FRONTEND_DIR, "logic.js"), media_type="application/javascript")
+    return FileResponse(os.path.join(FRONTEND_DIR, "logic.js"), media_type="application/javascript", headers=NO_CACHE_HEADERS)
 
 
 @app.get("/health", tags=["Служебные"], summary="Healthcheck")
