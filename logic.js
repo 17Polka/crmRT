@@ -665,100 +665,104 @@ async function loadUniversityDetails(id) {
 }
 
 // ---------------------------------------------------------------------------
-// Индивидуальные контрольные точки и подэтапы для каждого вуза
+// Индивидуальный маршрут Workflow для конкретного вуза
 // ---------------------------------------------------------------------------
 
-function initUniversityMilestones(v) {
-  if (!v.milestones) {
-    try {
-      const saved = localStorage.getItem(`crm_milestones_${v.id}`);
-      if (saved) {
-        v.milestones = JSON.parse(saved);
-      } else {
-        v.milestones = [
-          { text: "Согласовать куратора со стороны кафедры", done: true, deadline: todayString(), assignee: v.manager },
-          { text: "Подготовить списки студентов и преподавателей", done: v.stage >= 6, deadline: todayString(), assignee: v.manager },
-          { text: "Провести вводный инструктаж по платформе", done: v.stage >= 8, deadline: todayString(), assignee: v.manager }
-        ];
-        localStorage.setItem(`crm_milestones_${v.id}`, JSON.stringify(v.milestones));
+function getUniversityStages(v) {
+  if (!v.workflowStages || !v.workflowStages.length) {
+    const saved = localStorage.getItem(`crm_vuz_stages_${v.id}`);
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        v.workflowStages = parsed.map((s, idx) => typeof s === "string" ? { id: `stg-${idx}`, name: s, isCustom: idx >= 14 } : s);
+      } catch (e) {
+        v.workflowStages = STAGES.map((s, idx) => ({ id: `std-${idx}`, name: s, isCustom: false }));
       }
-    } catch (e) {
-      v.milestones = [];
+    } else {
+      v.workflowStages = STAGES.map((s, idx) => ({ id: `std-${idx}`, name: s, isCustom: false }));
     }
   }
+  return v.workflowStages;
 }
 
-async function addMilestone(vuzId) {
+function saveUniversityStages(v) {
+  localStorage.setItem(`crm_vuz_stages_${v.id}`, JSON.stringify(v.workflowStages));
+}
+
+async function addUniversityStage(vuzId) {
   const v = UNIVERSITIES.find((x) => x.id == vuzId);
   if (!v) return;
-  initUniversityMilestones(v);
-
-  const textInput = document.getElementById(`new_milestone_text_${vuzId}`);
-  const dateInput = document.getElementById(`new_milestone_date_${vuzId}`);
-  const assigneeInput = document.getElementById(`new_milestone_assignee_${vuzId}`);
-
-  const text = textInput ? textInput.value.trim() : "";
-  const deadline = dateInput ? dateInput.value : "";
-  const assignee = assigneeInput ? assigneeInput.value : v.manager;
-
-  if (!text) {
-    showToast("Введите текст задачи или контрольной точки!");
+  const uniStages = getUniversityStages(v);
+  const input = document.getElementById(`new_vuz_stage_input_${vuzId}`);
+  const name = input ? input.value.trim() : "";
+  if (!name) {
+    showToast("Введите название дополнительного этапа");
     return;
   }
-
-  const item = {
-    text: text,
-    done: false,
-    deadline: deadline,
-    assignee: assignee,
-    createdAt: new Date().toISOString()
+  const newStage = {
+    id: "cust-" + Date.now(),
+    name: name,
+    isCustom: true
   };
-  v.milestones.push(item);
-  localStorage.setItem(`crm_milestones_${vuzId}`, JSON.stringify(v.milestones));
+  const insertIndex = Math.min(v.stage + 1, uniStages.length);
+  uniStages.splice(insertIndex, 0, newStage);
+  saveUniversityStages(v);
 
   try {
     const formData = new FormData();
-    const commentMsg = `[Контрольная точка] Добавлена задача: «${text}»${deadline ? " (срок: " + deadline + ")" : ""}${assignee ? " (ответственный: " + assignee + ")" : ""}`;
-    formData.append("comment", commentMsg);
+    formData.append("comment", `[Workflow] Добавлен дополнительный этап: «${name}»`);
     apiFetch(`/api/workflow/${vuzId}/comment`, { method: "POST", body: formData }).catch(() => {});
   } catch (e) {}
 
-  showToast("Контрольная точка вуза добавлена!");
+  showToast(`Этап «${name}» добавлен в маршрут вуза`);
   render();
 }
 
-async function toggleMilestone(vuzId, idx) {
+function moveUniversityStage(vuzId, index, delta) {
   const v = UNIVERSITIES.find((x) => x.id == vuzId);
-  if (!v || !v.milestones || !v.milestones[idx]) return;
+  if (!v) return;
+  const uniStages = getUniversityStages(v);
+  const target = index + delta;
+  if (target < 0 || target >= uniStages.length) return;
 
-  v.milestones[idx].done = !v.milestones[idx].done;
-  localStorage.setItem(`crm_milestones_${vuzId}`, JSON.stringify(v.milestones));
+  const currentStageName = uniStages[v.stage]?.name;
+  const temp = uniStages[index];
+  uniStages[index] = uniStages[target];
+  uniStages[target] = temp;
 
-  const stateStr = v.milestones[idx].done ? "выполнена" : "возвращена в работу";
-  try {
-    const formData = new FormData();
-    formData.append("comment", `[Контрольная точка] Задача «${v.milestones[idx].text}» ${stateStr}`);
-    apiFetch(`/api/workflow/${vuzId}/comment`, { method: "POST", body: formData }).catch(() => {});
-  } catch (e) {}
+  const newCurrentIdx = uniStages.findIndex((s) => s.name === currentStageName);
+  if (newCurrentIdx !== -1) {
+    v.stage = newCurrentIdx;
+  }
 
-  showToast(`Задача ${stateStr}!`);
+  saveUniversityStages(v);
   render();
 }
 
-async function deleteMilestone(vuzId, idx) {
+function deleteUniversityStage(vuzId, index) {
   const v = UNIVERSITIES.find((x) => x.id == vuzId);
-  if (!v || !v.milestones || !v.milestones[idx]) return;
-
-  const removed = v.milestones.splice(idx, 1)[0];
-  localStorage.setItem(`crm_milestones_${vuzId}`, JSON.stringify(v.milestones));
+  if (!v) return;
+  const uniStages = getUniversityStages(v);
+  if (!uniStages[index] || !uniStages[index].isCustom) {
+    showToast("Базовые этапы регламента удалять нельзя");
+    return;
+  }
+  const removedName = uniStages[index].name;
+  if (v.stage === index) {
+    v.stage = Math.max(0, index - 1);
+  } else if (v.stage > index) {
+    v.stage -= 1;
+  }
+  uniStages.splice(index, 1);
+  saveUniversityStages(v);
 
   try {
     const formData = new FormData();
-    formData.append("comment", `[Контрольная точка] Удалена задача: «${removed.text}»`);
+    formData.append("comment", `[Workflow] Удален дополнительный этап: «${removedName}»`);
     apiFetch(`/api/workflow/${vuzId}/comment`, { method: "POST", body: formData }).catch(() => {});
   } catch (e) {}
 
-  showToast("Контрольная точка удалена");
+  showToast(`Этап «${removedName}» удален из маршрута`);
   render();
 }
 
@@ -780,8 +784,6 @@ function universityView(id) {
     loadUniversityDetails(id).then(() => render());
   }
 
-  initUniversityMilestones(v);
-
   const TABS = ["Общее", "Workflow", "Документы и лицензии", "Комментарии", "История"];
   let content = "";
 
@@ -799,60 +801,64 @@ function universityView(id) {
   }
 
   if (activeTab === 1) {
-    const milestones = v.milestones || [];
-    const doneCount = milestones.filter((m) => m.done).length;
+    const uniStages = getUniversityStages(v);
+    if (v.stage >= uniStages.length) v.stage = Math.max(0, uniStages.length - 1);
 
     content = `
-      <div class="st">
-        ${STAGES.map((stage, i) => `
-          <div class="${i < v.stage ? "d" : i === v.stage ? "n" : ""}">
-            <b>${i < v.stage ? "✓" : i + 1}</b>${stage}
-          </div>
-        `).join("")}
-      </div>
-      <p style="margin-top:16px;display:flex;gap:8px;flex-wrap:wrap">
-        <button class="b g" ${v.stage === 0 ? "disabled" : ""} onclick="openStageModal(${v.id}, -1)">← Вернуть на этап назад</button>
-        <button class="b" ${v.stage >= STAGES.length - 1 ? "disabled" : ""} onclick="openStageModal(${v.id}, 1)">Перевести на следующий этап →</button>
-        ${ROLES[role] >= 1 ? `<button class="b g" onclick="openAddStageModal()">➕ Добавить общий этап в воронку</button>` : ""}
-      </p>
-
-      <div class="cd" style="margin-top:24px;border:1px solid var(--bd);background:var(--cd)">
-        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
-          <div>
-            <h3 style="margin:0">🎯 Индивидуальные контрольные точки и задачи для вуза</h3>
-            <div class="mu" style="font-size:13px;margin-top:4px">
-              Персональный трек вуза в дополнение к общему регламенту. Выполнено: <b>${doneCount}</b> из <b>${milestones.length}</b>
-            </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:12px">
+        <div>
+          <h2 style="margin:0">Маршрут взаимодействия (${uniStages.length} этапов)</h2>
+          <div class="mu" style="font-size:13px;margin-top:2px">
+            Используйте стрелки для изменения порядка этапов. Дополнительные этапы можно удалять.
           </div>
         </div>
+      </div>
 
-        <div style="margin-top:14px">
-          ${milestones.length ? milestones.map((m, idx) => `
-            <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 12px;margin-bottom:8px;background:var(--bg);border:1px solid var(--bd);border-radius:6px;gap:12px;flex-wrap:wrap">
-              <label style="display:flex;align-items:center;gap:10px;flex:1;min-width:240px;cursor:pointer;margin:0">
-                <input type="checkbox" style="width:18px;height:18px;cursor:pointer" ${m.done ? "checked" : ""} onchange="toggleMilestone(${v.id}, ${idx})">
-                <span style="${m.done ? "text-decoration:line-through;color:var(--mu)" : "font-weight:600;color:var(--tx)"}">${m.text}</span>
-              </label>
-              <div style="display:flex;align-items:center;gap:8px;font-size:12px">
-                ${m.done ? '<span class="tag green" style="background:#e8f5e9;color:#2e7d32;padding:2px 8px;border-radius:12px">✓ Выполнено</span>' : '<span class="tag" style="background:#e3f2fd;color:#1565c0;padding:2px 8px;border-radius:12px">В работе</span>'}
-                ${m.deadline ? `<span class="mu">📅 до ${m.deadline}</span>` : ""}
-                ${m.assignee ? `<span class="mu">👤 ${m.assignee}</span>` : ""}
-                <button class="b g s" style="color:var(--dn);border-color:var(--dn);padding:2px 8px;font-size:12px" title="Удалить задачу" onclick="deleteMilestone(${v.id}, ${idx})">✕</button>
+      <div class="st">
+        ${uniStages.map((stg, i) => {
+          const isDone = i < v.stage;
+          const isCurrent = i === v.stage;
+          const cls = isDone ? "d" : isCurrent ? "n" : "";
+          const badge = isDone ? "✓" : (i + 1);
+
+          return `
+            <div class="${cls}" style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 0;border-bottom:1px solid var(--bd)">
+              <div style="display:flex;align-items:center;gap:12px;flex:1;min-width:200px">
+                <b>${badge}</b>
+                <div style="flex:1">
+                  <span style="${isDone ? 'color:var(--mu)' : isCurrent ? 'font-weight:700;color:var(--tx)' : ''}">
+                    ${stg.name}
+                  </span>
+                  ${stg.isCustom ? '<span class="tag" style="margin-left:8px;font-size:11px;padding:2px 6px">Дополнительный</span>' : ''}
+                  ${isCurrent ? '<span class="tag" style="margin-left:8px;font-size:11px;padding:2px 6px;background:var(--or);color:#fff">Текущий этап</span>' : ''}
+                </div>
+              </div>
+
+              <div style="display:flex;align-items:center;gap:4px">
+                <button class="b g s" ${i === 0 ? "disabled" : ""} onclick="moveUniversityStage(${v.id}, ${i}, -1)" title="Переместить выше">↑</button>
+                <button class="b g s" ${i === uniStages.length - 1 ? "disabled" : ""} onclick="moveUniversityStage(${v.id}, ${i}, 1)" title="Переместить ниже">↓</button>
+                ${stg.isCustom ? `
+                  <button class="b g s" style="color:var(--dn);border-color:var(--dn)" onclick="deleteUniversityStage(${v.id}, ${i})" title="Удалить этап">Удалить</button>
+                ` : ''}
               </div>
             </div>
-          `).join("") : '<p class="mu" style="font-style:italic">Индивидуальных задач пока нет. Вы можете добавить первую контрольную точку ниже.</p>'}
-        </div>
+          `;
+        }).join("")}
+      </div>
 
-        <div style="margin-top:14px;background:var(--in);border-radius:6px;padding:12px">
-          <div style="font-weight:600;margin-bottom:8px;font-size:13px">➕ Добавить контрольную точку / задачу вуза:</div>
-          <div style="display:flex;gap:8px;flex-wrap:wrap">
-            <input id="new_milestone_text_${v.id}" placeholder="Например: Согласовать доп. соглашение с юридическим отделом" style="flex:3;min-width:220px">
-            <input id="new_milestone_date_${v.id}" type="date" aria-label="Срок" style="flex:1;min-width:130px">
-            <select id="new_milestone_assignee_${v.id}" style="flex:1;min-width:140px;width:auto">
-              ${MANAGERS.map((m) => `<option value="${m}" ${m === v.manager ? "selected" : ""}>${m}</option>`).join("")}
-            </select>
-            <button class="b" onclick="addMilestone(${v.id})">Добавить задачу</button>
-          </div>
+      <p style="margin-top:16px;display:flex;gap:8px;flex-wrap:wrap">
+        <button class="b g" ${v.stage === 0 ? "disabled" : ""} onclick="openStageModal(${v.id}, -1)">← Вернуть на этап назад</button>
+        <button class="b" ${v.stage >= uniStages.length - 1 ? "disabled" : ""} onclick="openStageModal(${v.id}, 1)">Перевести на следующий этап →</button>
+      </p>
+
+      <div class="cd" style="margin-top:20px;background:var(--in);padding:14px;border-radius:10px">
+        <h3 style="margin:0 0 6px 0;font-size:15px">Добавить дополнительный этап в маршрут вуза</h3>
+        <p class="mu" style="font-size:13px;margin:0 0 10px 0">
+          Новый этап отобразится в общем списке выше. Вы сможете переместить его на нужную позицию стрелками.
+        </p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <input id="new_vuz_stage_input_${v.id}" placeholder="Название этапа (например: Согласование пилотной лаборатории с кафедрой)" style="flex:3;min-width:240px">
+          <button class="b" onclick="addUniversityStage(${v.id})">Добавить в маршрут</button>
         </div>
       </div>
     `;
@@ -867,7 +873,7 @@ function universityView(id) {
           return `
             <div style="padding:10px 0;border-bottom:1px solid var(--bd);display:flex;justify-content:space-between;align-items:center">
               <div>
-                <a onclick="${dlCall}">📄 <b>${f[0]}</b></a>
+                <a onclick="${dlCall}"><b>${f[0]}</b></a>
                 <span class="mu" style="font-size:13px"> · ${f[1]} · ${f[2]}</span>
               </div>
               <button class="b s g" onclick="${dlCall}">Скачать</button>
@@ -1042,27 +1048,41 @@ async function downloadAttachment(uniId, attId, filename) {
   }
 }
 
+function closeModal() {
+  const ov = document.getElementById("ov");
+  if (ov) ov.innerHTML = "";
+  const extra = document.getElementById("addStageModal");
+  if (extra) extra.remove();
+}
+
+function closeStageModal() {
+  closeModal();
+}
+
 function openStageModal(id, delta) {
   const v = UNIVERSITIES.find((x) => x.id == id);
+  if (!v) return;
+  const uniStages = getUniversityStages(v);
   const nextStage = v.stage + delta;
+  if (nextStage < 0 || nextStage >= uniStages.length) return;
+
+  const fromName = uniStages[v.stage]?.name || STAGES[v.stage] || ("Этап " + (v.stage + 1));
+  const toName = uniStages[nextStage]?.name || STAGES[nextStage] || ("Этап " + (nextStage + 1));
+
   $("#ov").innerHTML = `
     <div class="mo">
       <div class="cd">
-        <h2>${STAGES[v.stage]} → ${STAGES[nextStage]}</h2>
+        <h2>${fromName} → ${toName}</h2>
         <p class="mu">${v.name}</p>
         <textarea id="mc" rows="3" placeholder="${delta < 0 ? "Комментарий (обязательно при возврате по ТЗ)" : "Комментарий к смене этапа"}"></textarea>
         <p><input type="file" id="mf" aria-label="Прикрепить файл"></p>
         <p style="display:flex;gap:8px">
           <button class="b" onclick="confirmStageChange(${id}, ${delta})">Подтвердить перевод</button>
-          <button class="b g" onclick="closeStageModal()">Отмена</button>
+          <button class="b g" onclick="closeModal()">Отмена</button>
         </p>
       </div>
     </div>
   `;
-}
-
-function closeStageModal() {
-  $("#ov").innerHTML = "";
 }
 
 async function confirmStageChange(id, delta) {
@@ -1094,23 +1114,28 @@ async function confirmStageChange(id, delta) {
       body: formData
     });
     if (res.ok) {
-      showToast(`Вуз переведен на этап ${nextStage + 1} и сохранен в БД`);
+      const uniStages = getUniversityStages(v);
+      const toName = uniStages[nextStage]?.name || STAGES[nextStage] || ("Этап " + (nextStage + 1));
+      showToast(`Вуз переведен на этап: ${toName}`);
     }
   } catch (e) {
     console.warn("Локальное применение перехода:", e);
   }
 
+  const uniStages = getUniversityStages(v);
   const oldStage = v.stage;
   v.stage = nextStage;
   v.lastUpdate = todayString();
+  const fromName = uniStages[oldStage]?.name || STAGES[oldStage] || ("Этап " + (oldStage + 1));
+  const toName = uniStages[v.stage]?.name || STAGES[v.stage] || ("Этап " + (v.stage + 1));
   v.history.unshift({
-    text: `${STAGES[oldStage]} → ${STAGES[v.stage]}${comment ? ". " + comment : ""}`,
+    text: `${fromName} → ${toName}${comment ? ". " + comment : ""}`,
     date: todayString()
   });
   if (comment) v.comments.push([currentManagerName, todayString(), comment]);
   if (file) v.files.push([file.name, todayString(), currentManagerName]);
 
-  eventLog.unshift(`${todayString()} ${currentManagerName} перевёл «${v.name}» на этап ${v.stage + 1}`);
+  eventLog.unshift(`${todayString()} ${currentManagerName} перевёл «${v.name}» на этап: ${toName}`);
   closeStageModal();
   render();
 }
@@ -1148,12 +1173,8 @@ function workflowView() {
       <h1 style="margin:0">Канбан Workflow (${STAGES.length} этапов)</h1>
       ${ROLES[role] >= 1 ? `
         <div style="display:flex;gap:8px">
-          <button class="b" onclick="openAddStageModal()" style="display:inline-flex;align-items:center;gap:6px">
-            ➕ Добавить этап
-          </button>
-          <button class="b g" onclick="location.hash='#/admin'" style="display:inline-flex;align-items:center;gap:6px">
-            ⚙️ Настройка этапов
-          </button>
+          <button class="b" onclick="openAddStageModal()">Добавить этап</button>
+          <button class="b g" onclick="openManageStagesModal()">Настройка этапов</button>
         </div>
       ` : ""}
     </div>
@@ -1184,46 +1205,42 @@ function workflowView() {
 }
 
 function openAddStageModal() {
-  const existing = document.getElementById("addStageModal");
-  if (existing) existing.remove();
-
-  const modal = document.createElement("div");
-  modal.className = "modal";
-  modal.id = "addStageModal";
-  modal.style.display = "flex";
-  modal.innerHTML = `
-    <div class="m-content" style="max-width:520px;padding:24px">
-      <h3 style="margin-top:0">➕ Добавить новый этап в Workflow</h3>
-      <p class="mu">Новый этап автоматически появится на канбан-доске и сохранится в базе данных.</p>
-      <div style="margin-top:14px">
-        <label><b>Название этапа:</b></label>
-        <input id="modal_stage_name" placeholder="Например: Защита квалификационных работ" style="width:100%;margin-top:6px;box-sizing:border-box">
-      </div>
-      <div style="margin-top:14px">
-        <label><b>Категория регламента:</b></label>
-        <select id="modal_stage_category" style="width:100%;margin-top:6px;box-sizing:border-box">
-          <option value="Переговоры">Переговоры</option>
-          <option value="Документы">Документы</option>
-          <option value="Внедрение">Внедрение</option>
-          <option value="Обучение" selected>Обучение</option>
-          <option value="Сопровождение">Сопровождение</option>
-          <option value="Контроль">Контроль</option>
-        </select>
-      </div>
-      <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:20px">
-        <button class="b g" onclick="document.getElementById('addStageModal').remove()">Отмена</button>
-        <button class="b" onclick="submitNewStageFromModal()">Создать и добавить на доску</button>
+  const ov = document.getElementById("ov");
+  if (!ov) return;
+  ov.innerHTML = `
+    <div class="mo">
+      <div class="cd" style="max-width:500px">
+        <h2 style="margin-top:0">Добавить новый этап в Workflow</h2>
+        <p class="mu">Новый этап автоматически появится на канбан-доске и сохранится в базе данных.</p>
+        <div style="margin-top:14px">
+          <label style="display:block;margin-bottom:6px;font-weight:600">Название этапа:</label>
+          <input id="modal_stage_name" placeholder="Например: Защита квалификационных работ">
+        </div>
+        <div style="margin-top:14px">
+          <label style="display:block;margin-bottom:6px;font-weight:600">Категория регламента:</label>
+          <select id="modal_stage_category">
+            <option value="Переговоры">Переговоры</option>
+            <option value="Документы">Документы</option>
+            <option value="Внедрение">Внедрение</option>
+            <option value="Обучение" selected>Обучение</option>
+            <option value="Сопровождение">Сопровождение</option>
+            <option value="Контроль">Контроль</option>
+          </select>
+        </div>
+        <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:20px">
+          <button class="b g" onclick="closeModal()">Отмена</button>
+          <button class="b" onclick="submitNewStageFromModal()">Создать этап</button>
+        </div>
       </div>
     </div>
   `;
-  document.body.appendChild(modal);
 }
 
 async function submitNewStageFromModal() {
   const name = document.getElementById("modal_stage_name")?.value?.trim();
   const cat = document.getElementById("modal_stage_category")?.value?.trim() || "Обучение";
   if (!name) {
-    showToast("Введите название этапа!");
+    showToast("Введите название этапа");
     return;
   }
   try {
@@ -1234,8 +1251,8 @@ async function submitNewStageFromModal() {
     if (res.ok) {
       const data = await res.json();
       STAGES.push(data.name || name);
-      showToast(`Новый этап «${name}» успешно добавлен на доску!`);
-      document.getElementById("addStageModal")?.remove();
+      showToast(`Этап «${name}» успешно добавлен`);
+      closeModal();
       render();
     } else {
       const err = await res.json();
@@ -1244,9 +1261,61 @@ async function submitNewStageFromModal() {
   } catch (e) {
     STAGES.push(name);
     showToast(`Этап «${name}» добавлен`);
-    document.getElementById("addStageModal")?.remove();
+    closeModal();
     render();
   }
+}
+
+function openManageStagesModal() {
+  const ov = document.getElementById("ov");
+  if (!ov) return;
+  ov.innerHTML = `
+    <div class="mo">
+      <div class="cd" style="max-width:620px;max-height:85vh;display:flex;flex-direction:column">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+          <h2 style="margin:0">Настройка этапов Workflow (${STAGES.length})</h2>
+          <button class="b g s" onclick="closeModal()">✕</button>
+        </div>
+        <p class="mu" style="margin:0 0 12px 0;font-size:13px">
+          Используйте стрелки для изменения порядка этапов регламента.
+        </p>
+        <div style="overflow-y:auto;flex:1;padding-right:4px;display:flex;flex-direction:column;gap:8px">
+          ${STAGES.map((stage, i) => `
+            <div style="display:flex;gap:8px;align-items:center;padding:8px 10px;background:var(--in);border-radius:8px">
+              <span style="min-width:26px;font-weight:700;color:var(--pr);font-size:13px">${i + 1}.</span>
+              <input value="${stage}" aria-label="Этап ${i + 1}" onchange="updateStageName(${i}, this.value)" style="flex:1;background:var(--cd);padding:6px 10px">
+              <div style="display:flex;gap:4px">
+                <button class="b g s" ${i === 0 ? "disabled" : ""} onclick="moveGlobalStage(${i}, -1)" title="Поднять выше">↑</button>
+                <button class="b g s" ${i === STAGES.length - 1 ? "disabled" : ""} onclick="moveGlobalStage(${i}, 1)" title="Опустить ниже">↓</button>
+                ${i >= 14 ? `
+                  <button class="b g s" style="color:var(--dn);border-color:var(--dn)" onclick="deleteCustomStage(${i + 1})">Удалить</button>
+                ` : `
+                  <span class="mu" style="font-size:11px;min-width:55px;text-align:center">Базовый</span>
+                `}
+              </div>
+            </div>
+          `).join("")}
+        </div>
+        <div style="display:flex;justify-content:flex-end;margin-top:16px;padding-top:12px;border-top:1px solid var(--bd)">
+          <button class="b" onclick="closeModal()">Готово</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function moveGlobalStage(index, delta) {
+  const target = index + delta;
+  if (target < 0 || target >= STAGES.length) return;
+  const temp = STAGES[index];
+  STAGES[index] = STAGES[target];
+  STAGES[target] = temp;
+  UNIVERSITIES.forEach((u) => {
+    if (u.stage === index) u.stage = target;
+    else if (u.stage === target) u.stage = index;
+  });
+  openManageStagesModal();
+  render();
 }
 
 // ---------------------------------------------------------------------------
@@ -1575,7 +1644,7 @@ function adminView() {
       <h2>Настройка этапов workflow (${STAGES.length} этапов)</h2>
       
       <div class="cd" style="margin-bottom:14px;background:var(--in)">
-        <h3 style="margin-top:0">➕ Создать новый этап в Workflow</h3>
+        <h3 style="margin-top:0">Создать новый этап в Workflow</h3>
         <p class="mu">Администратор может создавать дополнительные этапы регламента (сохраняются в БД).</p>
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
           <input id="settings_new_stage" placeholder="Название нового этапа" style="flex:3;min-width:200px">
