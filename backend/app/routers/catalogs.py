@@ -482,82 +482,228 @@ async def delete_university(
 
 
 # ===========================================================================
-# IMPORT — xlsx → university catalog
+# IMPORT — xlsx/xls → university catalog (Поддержка всех полей ТЗ и синонимов)
 # ===========================================================================
 
-_EXPECTED_HEADERS = ["name", "short_name", "city", "inn", "licence_year"]
+try:
+    import xlrd
+    HAS_XLRD = True
+except ImportError:
+    HAS_XLRD = False
+
+HEADER_ALIASES: dict[str, list[str]] = {
+    "name": [
+        "name", "название", "наименование", "наименование вуза", "вуз",
+        "полное наименование", "учебное заведение", "университет", "организация",
+        "название вуза", "наименование организации"
+    ],
+    "short_name": [
+        "short_name", "краткое", "краткое наименование", "краткое название",
+        "аббревиатура", "сокр", "короткое имя"
+    ],
+    "city": [
+        "city", "город", "регион", "населенный пункт", "субъект рф", "субъект", "местонахождение"
+    ],
+    "inn": [
+        "inn", "инн", "идентификационный номер", "инн вуза"
+    ],
+    "licence_year": [
+        "licence_year", "license_year", "срок лицензии", "год лицензии",
+        "лицензия", "срок действия", "лицензия до", "год"
+    ],
+    "direction": [
+        "direction", "направление", "ит-направление", "программа",
+        "программа обучения", "направление подготовки"
+    ],
+    "product": [
+        "product", "продукт", "ит-продукт", "по", "софт", "вендорский продукт", "программное обеспечение"
+    ],
+    "manager": [
+        "manager", "менеджер", "кам", "ответственный", "курирующий менеджер", "ответственный кам"
+    ],
+    "contract": [
+        "contract", "договор", "номер договора", "соглашение", "номер соглашения"
+    ],
+    "contacts": [
+        "contacts", "контакты", "представители", "контактное лицо", "телефон", "email", "контактные данные"
+    ],
+}
+
+
+def _read_spreadsheet_rows(content: bytes, filename: str) -> list[list]:
+    lower_name = filename.lower()
+    if lower_name.endswith(".xlsx"):
+        wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+        ws = wb.active
+        return list(ws.iter_rows(values_only=True))
+    elif lower_name.endswith(".xls"):
+        if HAS_XLRD:
+            try:
+                wb = xlrd.open_workbook(file_contents=content)
+                ws = wb.sheet_by_index(0)
+                rows = []
+                for r in range(ws.nrows):
+                    rows.append([ws.cell_value(r, c) for c in range(ws.ncols)])
+                return rows
+            except Exception:
+                pass
+        # Fallback на случай, если .xlsx сохранили с расширением .xls
+        try:
+            wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+            ws = wb.active
+            return list(ws.iter_rows(values_only=True))
+        except Exception:
+            raise HTTPException(
+                400,
+                detail="Не удалось открыть файл .xls. Рекомендуется использовать современный формат .xlsx."
+            )
+    else:
+        raise HTTPException(400, detail="Поддерживаются только форматы .xlsx и .xls")
 
 
 @router.post(
     "/import/universities",
     response_model=ImportResult,
-    summary="Импорт вузов из Excel (.xlsx)",
+    summary="Импорт вузов из Excel (.xlsx / .xls)",
     description=(
-        "Ожидаемые столбцы (первая строка — заголовки):\n"
-        "`name`, `short_name`, `city`, `inn`, `licence_year`\n\n"
-        "Если вуз с таким `name` уже существует — обновляется."
+        "Поддерживает как английские (`name`, `inn`), так и русскоязычные заголовки "
+        "('Наименование ВУЗа', 'ИНН', 'Город', 'ИТ-Направление', 'ИТ-Продукт', 'Срок лицензии', 'Ответственный КАМ', 'Номер договора')."
     ),
 )
 async def import_universities_xlsx(
     request: Request,
-    file: UploadFile = File(..., description="xlsx-файл со справочником вузов"),
+    file: UploadFile = File(..., description="Excel-файл со справочником вузов (.xlsx, .xls)"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_admin),
 ):
-    if not file.filename.endswith((".xlsx", ".xls")):
+    if not file.filename.lower().endswith((".xlsx", ".xls")):
         raise HTTPException(400, detail="Ожидается файл .xlsx или .xls")
 
     content = await file.read()
     try:
-        wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
-        ws = wb.active
+        rows = _read_spreadsheet_rows(content, file.filename)
     except Exception as exc:
-        raise HTTPException(400, detail=f"Не удалось открыть файл: {exc}")
+        if isinstance(exc, HTTPException):
+            raise exc
+        raise HTTPException(400, detail=f"Ошибка чтения таблицы: {exc}")
 
-    rows = list(ws.iter_rows(values_only=True))
-    if not rows:
-        raise HTTPException(400, detail="Файл пустой.")
+    if not rows or len(rows) < 2:
+        raise HTTPException(400, detail="Файл пустой или содержит только строку заголовков.")
 
-    # Нормализуем заголовки
+    # Нормализуем заголовки и строим маппинг колонок по синонимам
     raw_headers = [str(c).strip().lower() if c else "" for c in rows[0]]
     header_map: dict[str, int] = {}
-    for expected in _EXPECTED_HEADERS:
-        if expected in raw_headers:
-            header_map[expected] = raw_headers.index(expected)
 
+    for col_key, aliases in HEADER_ALIASES.items():
+        for col_idx, h_name in enumerate(raw_headers):
+            if h_name in aliases or any(alias in h_name for alias in aliases):
+                header_map[col_key] = col_idx
+                break
+
+    # Если 'name' не найден по алиасам, проверим первую колонку
     if "name" not in header_map:
-        raise HTTPException(
-            400,
-            detail=f"Не найден обязательный столбец 'name'. "
-                   f"Обнаруженные: {raw_headers}",
-        )
+        if raw_headers and raw_headers[0]:
+            header_map["name"] = 0
+        else:
+            raise HTTPException(
+                400,
+                detail=f"Не найден столбец с наименованием ВУЗа (ожидались: 'Наименование', 'ВУЗ', 'name'). "
+                       f"Обнаруженные заголовки: {raw_headers}",
+            )
+
+    # Предзагружаем справочники направлений, продуктов и менеджеров для связи
+    existing_dirs = {d.name.lower(): d.id for d in (await db.scalars(select(Direction))).all()}
+    existing_prods = {p.name.lower(): p.id for p in (await db.scalars(select(Product))).all()}
+    managers = (await db.scalars(select(User).where(User.is_active == True))).all()
 
     created = updated = skipped = 0
     errors: list[str] = []
 
     for row_num, row in enumerate(rows[1:], start=2):
+        if not row:
+            skipped += 1
+            continue
+
         def cell(col: str):
             idx = header_map.get(col)
-            return row[idx] if idx is not None and idx < len(row) else None
+            if idx is not None and idx < len(row):
+                val = row[idx]
+                return str(val).strip() if val is not None else None
+            return None
 
-        name = str(cell("name")).strip() if cell("name") else None
+        name = cell("name")
         if not name:
             skipped += 1
             continue
 
         try:
-            existing = await db.scalar(
-                select(University).where(University.name == name)
-            )
+            inn = cell("inn")
+            # Поиск по ИНН или по наименованию
+            existing = None
+            if inn:
+                existing = await db.scalar(select(University).where(University.inn == inn))
+            if not existing:
+                existing = await db.scalar(select(University).where(University.name == name))
+
+            # Связь с направлением
+            dir_id = None
+            dir_name = cell("direction")
+            if dir_name:
+                dir_id = existing_dirs.get(dir_name.lower())
+                if not dir_id:
+                    new_d = Direction(name=dir_name)
+                    db.add(new_d)
+                    await db.flush()
+                    dir_id = new_d.id
+                    existing_dirs[dir_name.lower()] = dir_id
+
+            # Связь с продуктом
+            prod_id = None
+            prod_name = cell("product")
+            if prod_name:
+                prod_id = existing_prods.get(prod_name.lower())
+                if not prod_id:
+                    new_p = Product(name=prod_name, direction_id=dir_id)
+                    db.add(new_p)
+                    await db.flush()
+                    prod_id = new_p.id
+                    existing_prods[prod_name.lower()] = prod_id
+
+            # Связь с менеджером
+            mgr_id = None
+            mgr_str = cell("manager")
+            if mgr_str:
+                m_lower = mgr_str.lower()
+                for m in managers:
+                    if m.username.lower() == m_lower or m_lower in m.full_name.lower():
+                        mgr_id = m.id
+                        break
+
+            # Преобразование года лицензии
+            lic_year = None
+            lic_val = cell("licence_year")
+            if lic_val:
+                try:
+                    lic_year = int(float(lic_val))
+                except (ValueError, TypeError):
+                    pass
 
             data = {
                 "name": name,
-                "short_name": str(cell("short_name")).strip() if cell("short_name") else None,
-                "city": str(cell("city")).strip() if cell("city") else None,
-                "inn": str(cell("inn")).strip() if cell("inn") else None,
-                "licence_year": int(cell("licence_year")) if cell("licence_year") else None,
+                "short_name": cell("short_name"),
+                "city": cell("city"),
+                "inn": inn,
+                "licence_year": lic_year,
+                "contract_number": cell("contract"),
+                "university_contacts": cell("contacts"),
             }
-            # Убираем None-значения при обновлении, чтобы не затирать существующие
+            if dir_id:
+                data["direction_id"] = dir_id
+            if prod_id:
+                data["product_id"] = prod_id
+            if mgr_id:
+                data["manager_id"] = mgr_id
+
             if existing:
                 for k, v in data.items():
                     if v is not None:

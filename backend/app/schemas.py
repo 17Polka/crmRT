@@ -176,7 +176,7 @@ class UniversityOut(UniversityBase, _TimestampMixin):
 # ---------------------------------------------------------------------------
 
 class StageBase(BaseModel):
-    order: int
+    order: Optional[int] = None
     name: str
     description: Optional[str] = None
     category: Optional[str] = "Общий"

@@ -34,7 +34,16 @@ from app.models import AuditAction, AuditLog, BlockedToken, User, UserRole
 # Config
 # ---------------------------------------------------------------------------
 
-SECRET_KEY: str     = os.getenv("SECRET_KEY", "CHANGE_ME_in_production_32chars!!")
+ENV = os.getenv("ENVIRONMENT", "development").lower()
+RAW_SECRET_KEY = os.getenv("SECRET_KEY")
+
+if not RAW_SECRET_KEY or RAW_SECRET_KEY.startswith("CHANGE_ME"):
+    if ENV in ("production", "prod"):
+        raise RuntimeError("КРИТИЧЕСКАЯ ОШИБКА БЕЗОПАСНОСТИ: В production-режиме переменная SECRET_KEY должна быть явно задана стойким ключом (не менее 32 символов)!")
+    SECRET_KEY: str = "c7f9e8a1d2b34567890abcdef1234567890abcdef1234567890abcdef1234567"
+else:
+    SECRET_KEY: str = RAW_SECRET_KEY
+
 ALGORITHM: str      = os.getenv("JWT_ALGORITHM", "HS256")
 ACCESS_TOKEN_TTL    = int(os.getenv("ACCESS_TOKEN_TTL_MINUTES", "60"))
 

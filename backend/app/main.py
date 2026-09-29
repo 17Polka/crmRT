@@ -72,10 +72,21 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
-# Разрешаем все origins для удобства тестирования и интеграции
+# Настройка CORS
+cors_origins_env = os.getenv("CORS_ORIGINS", "")
+if cors_origins_env:
+    origins = [o.strip() for o in cors_origins_env.split(",") if o.strip()]
+elif os.getenv("ENVIRONMENT", "development").lower() == "production":
+    origins = [
+        "https://crm-rostelecom.onrender.com",
+    ]
+else:
+    # В dev-режиме разрешаем локальные и любые origins
+    origins = ["*"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

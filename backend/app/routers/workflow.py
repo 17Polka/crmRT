@@ -79,6 +79,69 @@ async def update_stage(
     return stage
 
 
+@router.post("/stages", response_model=StageOut, summary="Создать новый этап workflow (Admin+)")
+async def create_stage(
+    data: StageBase,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    max_order = await db.scalar(select(func.max(WorkflowStage.order)))
+    new_order = (max_order + 1) if max_order is not None else 0
+    new_stage = WorkflowStage(
+        order=new_order,
+        name=data.name,
+        description=data.description,
+        category=data.category or "Пользовательский",
+        is_active=True,
+    )
+    db.add(new_stage)
+    await write_audit(
+        db,
+        action=AuditAction.workflow_transition,
+        user=current_user,
+        resource_type="workflow_stage",
+        resource_id=str(new_order),
+        detail={"created": data.name, "order": new_order},
+        request=request,
+    )
+    await db.commit()
+    await db.refresh(new_stage)
+    return new_stage
+
+
+@router.delete("/stages/{stage_id}", summary="Деактивировать этап workflow (Admin+)")
+async def delete_stage(
+    stage_id: int,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    stage = await db.get(WorkflowStage, stage_id)
+    if not stage:
+        raise HTTPException(status_code=404, detail="Этап не найден")
+    unis_count = await db.scalar(
+        select(func.count(University.id)).where(University.current_stage_order == stage.order, University.is_active == True)
+    )
+    if unis_count > 0:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Невозможно деактивировать этап: на нём находятся {unis_count} вузов. Сначала переведите их на другие этапы."
+        )
+    stage.is_active = False
+    await write_audit(
+        db,
+        action=AuditAction.workflow_transition,
+        user=current_user,
+        resource_type="workflow_stage",
+        resource_id=str(stage_id),
+        detail={"deactivated": stage.name},
+        request=request,
+    )
+    await db.commit()
+    return {"ok": True, "message": f"Этап '{stage.name}' деактивирован"}
+
+
 # ---------------------------------------------------------------------------
 # Доска workflow (вузы по этапам)
 # ---------------------------------------------------------------------------
@@ -318,17 +381,32 @@ async def upload_attachment(
             detail=f"Ошибка 1002: неверный формат файла .{ext}. Допустимы: png, jpg, pdf, zip, rar, docx, xlsx"
         )
 
+    MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
+    content = await file.read()
+    if len(content) > MAX_FILE_SIZE:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Ошибка 1002: Размер файла ({len(content) // (1024*1024)} МБ) превышает допустимый лимит 50 МБ"
+        )
+
+    # Защита от загрузки исполняемых и вредоносных бинарников
+    if content.startswith(b"MZ") or content.startswith(b"\x7fELF") or content.startswith(b"#!/"):
+        raise HTTPException(
+            status_code=400,
+            detail="Ошибка 1002: Загрузка исполняемых файлов и скриптов (EXE, ELF, SH) запрещена политикой ИБ"
+        )
+
     safe_filename = f"uni_{uni.id}_st{uni.current_stage_order}_{file.filename}"
     dest_path = os.path.join(UPLOAD_DIR, safe_filename)
     with open(dest_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+        buffer.write(content)
 
     rec = Attachment(
         university_id=uni.id,
         stage_order=uni.current_stage_order,
         filename=file.filename,
         stored_path=dest_path,
-        file_size=os.path.getsize(dest_path),
+        file_size=len(content),
         mime_type=file.content_type,
         uploaded_by=current_user.full_name,
     )

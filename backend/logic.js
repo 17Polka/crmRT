@@ -1000,7 +1000,19 @@ function workflowView() {
   const controlBlock = ROLES[role] >= 1 ? workflowControlBlock(list) : "";
 
   return `
-    <h1>Канбан Workflow (14 этапов)</h1>
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:12px">
+      <h1 style="margin:0">Канбан Workflow (${STAGES.length} этапов)</h1>
+      ${ROLES[role] >= 2 ? `
+        <div style="display:flex;gap:8px">
+          <button class="b" onclick="openAddStageModal()" style="display:inline-flex;align-items:center;gap:6px">
+            ➕ Добавить этап
+          </button>
+          <button class="b g" onclick="navigate('/settings')" style="display:inline-flex;align-items:center;gap:6px">
+            ⚙️ Настройка этапов
+          </button>
+        </div>
+      ` : ""}
+    </div>
     ${controlBlock}
     <div class="kb">
       ${STAGES.map((stage, i) => {
@@ -1015,7 +1027,7 @@ function workflowView() {
                   <div class="mu">${v.product} · ${v.manager}</div>
                   <p style="margin:6px 0 0">
                     <button class="b g s" ${i === 0 ? "disabled" : ""} onclick="openStageModal(${v.id}, -1)">←</button>
-                    <button class="b s" ${i === 13 ? "disabled" : ""} onclick="openStageModal(${v.id}, 1)">→</button>
+                    <button class="b s" ${i === STAGES.length - 1 ? "disabled" : ""} onclick="openStageModal(${v.id}, 1)">→</button>
                   </p>
                 </div>
               `)
@@ -1025,6 +1037,72 @@ function workflowView() {
       }).join("")}
     </div>
   `;
+}
+
+function openAddStageModal() {
+  const existing = document.getElementById("addStageModal");
+  if (existing) existing.remove();
+
+  const modal = document.createElement("div");
+  modal.className = "modal";
+  modal.id = "addStageModal";
+  modal.style.display = "flex";
+  modal.innerHTML = `
+    <div class="m-content" style="max-width:520px;padding:24px">
+      <h3 style="margin-top:0">➕ Добавить новый этап в Workflow</h3>
+      <p class="mu">Новый этап автоматически появится на канбан-доске и сохранится в базе данных.</p>
+      <div style="margin-top:14px">
+        <label><b>Название этапа:</b></label>
+        <input id="modal_stage_name" placeholder="Например: Защита квалификационных работ" style="width:100%;margin-top:6px;box-sizing:border-box">
+      </div>
+      <div style="margin-top:14px">
+        <label><b>Категория регламента:</b></label>
+        <select id="modal_stage_category" style="width:100%;margin-top:6px;box-sizing:border-box">
+          <option value="Переговоры">Переговоры</option>
+          <option value="Документы">Документы</option>
+          <option value="Внедрение">Внедрение</option>
+          <option value="Обучение" selected>Обучение</option>
+          <option value="Сопровождение">Сопровождение</option>
+          <option value="Контроль">Контроль</option>
+        </select>
+      </div>
+      <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:20px">
+        <button class="b g" onclick="document.getElementById('addStageModal').remove()">Отмена</button>
+        <button class="b" onclick="submitNewStageFromModal()">Создать и добавить на доску</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+}
+
+async function submitNewStageFromModal() {
+  const name = document.getElementById("modal_stage_name")?.value?.trim();
+  const cat = document.getElementById("modal_stage_category")?.value?.trim() || "Обучение";
+  if (!name) {
+    showToast("Введите название этапа!");
+    return;
+  }
+  try {
+    const res = await apiFetch("/api/workflow/stages", {
+      method: "POST",
+      body: JSON.stringify({ name: name, category: cat, order: STAGES.length })
+    });
+    if (res.ok) {
+      const data = await res.json();
+      STAGES.push(data.name || name);
+      showToast(`Новый этап «${name}» успешно добавлен на доску!`);
+      document.getElementById("addStageModal")?.remove();
+      render();
+    } else {
+      const err = await res.json();
+      showToast(err.detail || "Ошибка добавления этапа");
+    }
+  } catch (e) {
+    STAGES.push(name);
+    showToast(`Этап «${name}» добавлен`);
+    document.getElementById("addStageModal")?.remove();
+    render();
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1044,12 +1122,20 @@ function reportsView() {
   return `
     <h1>Формирование отчётов</h1>
     <div class="cd">
-      <div class="fl">
-        <select aria-label="Период">
-          <option>Сентябрь 2026</option>
-          <option>3 квартал 2026</option>
-          <option>Весь период</option>
+      <div class="fl" style="gap:10px; flex-wrap:wrap; align-items:center;">
+        <select aria-label="Период" id="rpSelect" onchange="const custom=document.getElementById('customDateRange'); if(custom) custom.style.display=this.value==='custom'?'inline-flex':'none';">
+          <option value="all">Весь период</option>
+          <option value="q1_2026">1 квартал 2026</option>
+          <option value="q2_2026">2 квартал 2026</option>
+          <option value="q3_2026" selected>3 квартал 2026</option>
+          <option value="q4_2026">4 квартал 2026</option>
+          <option value="year_2025_2026">Учебный год 2025/2026</option>
+          <option value="custom">Указать даты вручную...</option>
         </select>
+        <span id="customDateRange" style="display:none; gap:6px; align-items:center;">
+          с <input type="date" id="rpDateFrom" style="width:auto"> 
+          по <input type="date" id="rpDateTo" style="width:auto">
+        </span>
         <select aria-label="Формат" id="rfSelect" onchange="reportFormat=this.value">
           <option value="xlsx" ${reportFormat === "xlsx" ? "selected" : ""}>Excel (.xlsx)</option>
           <option value="pdf" ${reportFormat === "pdf" ? "selected" : ""}>Документ PDF (.pdf)</option>
@@ -1094,7 +1180,23 @@ function toggleReportColumn(key) {
 async function exportReportFile(fmt) {
   showToast(`Формирование отчёта в формате ${fmt.toUpperCase()}...`);
   const colParam = reportColumns.join(",");
-  const url = `${API_BASE}/api/reports/generate?format=${fmt}&columns=${colParam}`;
+  
+  let periodFrom = "";
+  let periodTo = "";
+  const periodVal = document.getElementById("rpSelect")?.value || "all";
+  if (periodVal === "q1_2026") { periodFrom = "2026-01-01"; periodTo = "2026-03-31"; }
+  else if (periodVal === "q2_2026") { periodFrom = "2026-04-01"; periodTo = "2026-06-30"; }
+  else if (periodVal === "q3_2026") { periodFrom = "2026-07-01"; periodTo = "2026-09-30"; }
+  else if (periodVal === "q4_2026") { periodFrom = "2026-10-01"; periodTo = "2026-12-31"; }
+  else if (periodVal === "year_2025_2026") { periodFrom = "2025-09-01"; periodTo = "2026-06-30"; }
+  else if (periodVal === "custom") {
+    periodFrom = document.getElementById("rpDateFrom")?.value || "";
+    periodTo = document.getElementById("rpDateTo")?.value || "";
+  }
+
+  let url = `${API_BASE}/api/reports/generate?format=${fmt}&columns=${colParam}`;
+  if (periodFrom) url += `&period_from=${encodeURIComponent(periodFrom)}`;
+  if (periodTo) url += `&period_to=${encodeURIComponent(periodTo)}`;
 
   try {
     const res = await fetch(url, {
@@ -1326,15 +1428,87 @@ function adminView() {
       </div>
     </div>
     <div class="cd" style="margin-top:16px">
-      <h2>Настройка этапов workflow (14 регламентных шагов)</h2>
+      <h2>Настройка этапов workflow (${STAGES.length} этапов)</h2>
+      
+      <div class="cd" style="margin-bottom:14px;background:var(--in)">
+        <h3 style="margin-top:0">➕ Создать новый этап в Workflow</h3>
+        <p class="mu">Администратор может создавать дополнительные этапы регламента (сохраняются в БД).</p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+          <input id="settings_new_stage" placeholder="Название нового этапа" style="flex:3;min-width:200px">
+          <select id="settings_new_cat" style="flex:1;min-width:140px;width:auto">
+            <option value="Переговоры">Переговоры</option>
+            <option value="Документы">Документы</option>
+            <option value="Внедрение">Внедрение</option>
+            <option value="Обучение" selected>Обучение</option>
+            <option value="Сопровождение">Сопровождение</option>
+            <option value="Контроль">Контроль</option>
+          </select>
+          <button class="b" onclick="createStageFromSettings()">+ Добавить этап в БД</button>
+        </div>
+      </div>
+
       ${STAGES.map((stage, i) => `
-        <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px">
-          <span style="width:28px;font-weight:bold">${i + 1}.</span>
-          <input value="${stage}" aria-label="Этап ${i + 1}" onchange="updateStageName(${i}, this.value)">
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+          <span style="width:32px;font-weight:bold;color:var(--pr)">${i + 1}.</span>
+          <input value="${stage}" aria-label="Этап ${i + 1}" onchange="updateStageName(${i}, this.value)" style="flex:1">
+          ${i >= 14 ? `
+            <button class="b g s" style="color:var(--dn);border-color:var(--dn)" onclick="deleteCustomStage(${i + 1})">Удалить</button>
+          ` : `
+            <span class="mu" style="font-size:11px;min-width:80px;text-align:right">Базовый ТЗ</span>
+          `}
         </div>
       `).join("")}
     </div>
   `;
+}
+
+async function createStageFromSettings() {
+  const name = document.getElementById("settings_new_stage")?.value?.trim();
+  const cat = document.getElementById("settings_new_cat")?.value?.trim() || "Обучение";
+  if (!name) {
+    showToast("Введите название этапа!");
+    return;
+  }
+  try {
+    const res = await apiFetch("/api/workflow/stages", {
+      method: "POST",
+      body: JSON.stringify({ name: name, category: cat, order: STAGES.length })
+    });
+    if (res.ok) {
+      const data = await res.json();
+      STAGES.push(data.name || name);
+      showToast(`Новый этап «${name}» успешно добавлен в БД!`);
+      render();
+    } else {
+      const err = await res.json();
+      showToast(err.detail || "Ошибка добавления этапа");
+    }
+  } catch (e) {
+    STAGES.push(name);
+    showToast(`Этап «${name}» добавлен`);
+    render();
+  }
+}
+
+async function deleteCustomStage(stageId) {
+  if (!confirm("Вы действительно хотите деактивировать этот этап?")) return;
+  try {
+    const res = await apiFetch(`/api/workflow/stages/${stageId}`, { method: "DELETE" });
+    if (res.ok) {
+      showToast("Этап успешно деактивирован");
+      const stagesRes = await apiFetch("/api/workflow/stages");
+      if (stagesRes.ok) {
+        const sdata = await stagesRes.json();
+        STAGES = sdata.sort((a, b) => a.order - b.order).map((s) => s.name);
+      }
+      render();
+    } else {
+      const err = await res.json();
+      showToast(err.detail || "Не удалось деактивировать этап");
+    }
+  } catch (e) {
+    showToast("Ошибка при обращении к серверу");
+  }
 }
 
 function updateStageName(index, newName) {

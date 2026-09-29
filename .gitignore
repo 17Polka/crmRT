@@ -12,6 +12,11 @@ venv/
 *.zip
 *.tar.gz
 
+# Local private docs (not to be pushed)
+ПОЯСНИТЕЛЬНАЯ_ЗАПИСКА.md
+EXPLANATORY_NOTE.md
+DOCUMENTATION.md
+
 # OS generated
 Thumbs.db
 Desktop.ini

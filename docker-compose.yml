@@ -8,10 +8,14 @@ services:
     container_name: crmrt-app
     restart: always
     environment:
-      - DATABASE_URL=postgresql+asyncpg://crm:secret@postgres:5432/crmrt
-      - SECRET_KEY=super_secret_crm_key_rostelecom_2026
-      - KEYCLOAK_ENABLED=false
-      - CORS_ORIGINS=*
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-crm}:${POSTGRES_PASSWORD:-secret}@postgres:5432/${POSTGRES_DB:-crmrt}
+      - SECRET_KEY=${SECRET_KEY:-super_secret_crm_key_rostelecom_2026_long_safe}
+      - KEYCLOAK_ENABLED=${KEYCLOAK_ENABLED:-false}
+      - KEYCLOAK_URL=${KEYCLOAK_URL:-http://keycloak:8080}
+      - KEYCLOAK_REALM=${KEYCLOAK_REALM:-crmrt}
+      - KEYCLOAK_CLIENT_ID=${KEYCLOAK_CLIENT_ID:-crm-backend}
+      - CORS_ORIGINS=${CORS_ORIGINS:-*}
+      - INTEGRATION_API_KEY=${INTEGRATION_API_KEY:-rtk-integrations-secret-key-2026}
     ports:
       - "8000:8000"
     depends_on:
@@ -28,18 +32,32 @@ services:
     container_name: crmrt-postgres
     restart: always
     environment:
-      POSTGRES_USER: crm
-      POSTGRES_PASSWORD: secret
-      POSTGRES_DB: crmrt
+      POSTGRES_USER: ${POSTGRES_USER:-crm}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-secret}
+      POSTGRES_DB: ${POSTGRES_DB:-crmrt}
     ports:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U crm -d crmrt"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-crm} -d ${POSTGRES_DB:-crmrt}"]
       interval: 5s
       timeout: 5s
       retries: 5
+
+  # Опциональный сервис Keycloak для корпоративного SSO (запуск: docker compose --profile sso up)
+  keycloak:
+    image: quay.io/keycloak/keycloak:24.0
+    container_name: crmrt-keycloak
+    profiles: ["sso"]
+    command: start-dev
+    environment:
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
+    ports:
+      - "8080:8080"
+    depends_on:
+      - postgres
 
 volumes:
   pgdata:
