@@ -87,7 +87,7 @@ const NAV = [
   ["reports", "Отчёты", 0],
   ["catalogs", "Каталоги", 1],
   ["integ", "Интеграции", 2],
-  ["admin", "Администрирование", 2],
+  ["admin", "Администрирование", 1],
   ["docs", "Справка", 0]
 ];
 
@@ -487,7 +487,7 @@ function dashboardView() {
       </div>
       <div class="cd">
         <div class="k">${averageStage}</div>
-        <div class="mu">средний этап из 14</div>
+        <div class="mu">средний этап из ${STAGES.length}</div>
       </div>
     </div>
     <div class="cd" style="margin-top:16px">
@@ -664,6 +664,104 @@ async function loadUniversityDetails(id) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Индивидуальные контрольные точки и подэтапы для каждого вуза
+// ---------------------------------------------------------------------------
+
+function initUniversityMilestones(v) {
+  if (!v.milestones) {
+    try {
+      const saved = localStorage.getItem(`crm_milestones_${v.id}`);
+      if (saved) {
+        v.milestones = JSON.parse(saved);
+      } else {
+        v.milestones = [
+          { text: "Согласовать куратора со стороны кафедры", done: true, deadline: todayString(), assignee: v.manager },
+          { text: "Подготовить списки студентов и преподавателей", done: v.stage >= 6, deadline: todayString(), assignee: v.manager },
+          { text: "Провести вводный инструктаж по платформе", done: v.stage >= 8, deadline: todayString(), assignee: v.manager }
+        ];
+        localStorage.setItem(`crm_milestones_${v.id}`, JSON.stringify(v.milestones));
+      }
+    } catch (e) {
+      v.milestones = [];
+    }
+  }
+}
+
+async function addMilestone(vuzId) {
+  const v = UNIVERSITIES.find((x) => x.id == vuzId);
+  if (!v) return;
+  initUniversityMilestones(v);
+
+  const textInput = document.getElementById(`new_milestone_text_${vuzId}`);
+  const dateInput = document.getElementById(`new_milestone_date_${vuzId}`);
+  const assigneeInput = document.getElementById(`new_milestone_assignee_${vuzId}`);
+
+  const text = textInput ? textInput.value.trim() : "";
+  const deadline = dateInput ? dateInput.value : "";
+  const assignee = assigneeInput ? assigneeInput.value : v.manager;
+
+  if (!text) {
+    showToast("Введите текст задачи или контрольной точки!");
+    return;
+  }
+
+  const item = {
+    text: text,
+    done: false,
+    deadline: deadline,
+    assignee: assignee,
+    createdAt: new Date().toISOString()
+  };
+  v.milestones.push(item);
+  localStorage.setItem(`crm_milestones_${vuzId}`, JSON.stringify(v.milestones));
+
+  try {
+    const formData = new FormData();
+    const commentMsg = `[Контрольная точка] Добавлена задача: «${text}»${deadline ? " (срок: " + deadline + ")" : ""}${assignee ? " (ответственный: " + assignee + ")" : ""}`;
+    formData.append("comment", commentMsg);
+    apiFetch(`/api/workflow/${vuzId}/comment`, { method: "POST", body: formData }).catch(() => {});
+  } catch (e) {}
+
+  showToast("Контрольная точка вуза добавлена!");
+  render();
+}
+
+async function toggleMilestone(vuzId, idx) {
+  const v = UNIVERSITIES.find((x) => x.id == vuzId);
+  if (!v || !v.milestones || !v.milestones[idx]) return;
+
+  v.milestones[idx].done = !v.milestones[idx].done;
+  localStorage.setItem(`crm_milestones_${vuzId}`, JSON.stringify(v.milestones));
+
+  const stateStr = v.milestones[idx].done ? "выполнена" : "возвращена в работу";
+  try {
+    const formData = new FormData();
+    formData.append("comment", `[Контрольная точка] Задача «${v.milestones[idx].text}» ${stateStr}`);
+    apiFetch(`/api/workflow/${vuzId}/comment`, { method: "POST", body: formData }).catch(() => {});
+  } catch (e) {}
+
+  showToast(`Задача ${stateStr}!`);
+  render();
+}
+
+async function deleteMilestone(vuzId, idx) {
+  const v = UNIVERSITIES.find((x) => x.id == vuzId);
+  if (!v || !v.milestones || !v.milestones[idx]) return;
+
+  const removed = v.milestones.splice(idx, 1)[0];
+  localStorage.setItem(`crm_milestones_${vuzId}`, JSON.stringify(v.milestones));
+
+  try {
+    const formData = new FormData();
+    formData.append("comment", `[Контрольная точка] Удалена задача: «${removed.text}»`);
+    apiFetch(`/api/workflow/${vuzId}/comment`, { method: "POST", body: formData }).catch(() => {});
+  } catch (e) {}
+
+  showToast("Контрольная точка удалена");
+  render();
+}
+
 function universityView(id) {
   const v = visibleUniversities().find((x) => x.id == id);
   if (!v) {
@@ -682,6 +780,8 @@ function universityView(id) {
     loadUniversityDetails(id).then(() => render());
   }
 
+  initUniversityMilestones(v);
+
   const TABS = ["Общее", "Workflow", "Документы и лицензии", "Комментарии", "История"];
   let content = "";
 
@@ -699,6 +799,9 @@ function universityView(id) {
   }
 
   if (activeTab === 1) {
+    const milestones = v.milestones || [];
+    const doneCount = milestones.filter((m) => m.done).length;
+
     content = `
       <div class="st">
         ${STAGES.map((stage, i) => `
@@ -707,10 +810,51 @@ function universityView(id) {
           </div>
         `).join("")}
       </div>
-      <p style="margin-top:16px">
+      <p style="margin-top:16px;display:flex;gap:8px;flex-wrap:wrap">
         <button class="b g" ${v.stage === 0 ? "disabled" : ""} onclick="openStageModal(${v.id}, -1)">← Вернуть на этап назад</button>
-        <button class="b" ${v.stage === 13 ? "disabled" : ""} onclick="openStageModal(${v.id}, 1)">Перевести на следующий этап →</button>
+        <button class="b" ${v.stage >= STAGES.length - 1 ? "disabled" : ""} onclick="openStageModal(${v.id}, 1)">Перевести на следующий этап →</button>
+        ${ROLES[role] >= 1 ? `<button class="b g" onclick="openAddStageModal()">➕ Добавить общий этап в воронку</button>` : ""}
       </p>
+
+      <div class="cd" style="margin-top:24px;border:1px solid var(--bd);background:var(--cd)">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+          <div>
+            <h3 style="margin:0">🎯 Индивидуальные контрольные точки и задачи для вуза</h3>
+            <div class="mu" style="font-size:13px;margin-top:4px">
+              Персональный трек вуза в дополнение к общему регламенту. Выполнено: <b>${doneCount}</b> из <b>${milestones.length}</b>
+            </div>
+          </div>
+        </div>
+
+        <div style="margin-top:14px">
+          ${milestones.length ? milestones.map((m, idx) => `
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 12px;margin-bottom:8px;background:var(--bg);border:1px solid var(--bd);border-radius:6px;gap:12px;flex-wrap:wrap">
+              <label style="display:flex;align-items:center;gap:10px;flex:1;min-width:240px;cursor:pointer;margin:0">
+                <input type="checkbox" style="width:18px;height:18px;cursor:pointer" ${m.done ? "checked" : ""} onchange="toggleMilestone(${v.id}, ${idx})">
+                <span style="${m.done ? "text-decoration:line-through;color:var(--mu)" : "font-weight:600;color:var(--tx)"}">${m.text}</span>
+              </label>
+              <div style="display:flex;align-items:center;gap:8px;font-size:12px">
+                ${m.done ? '<span class="tag green" style="background:#e8f5e9;color:#2e7d32;padding:2px 8px;border-radius:12px">✓ Выполнено</span>' : '<span class="tag" style="background:#e3f2fd;color:#1565c0;padding:2px 8px;border-radius:12px">В работе</span>'}
+                ${m.deadline ? `<span class="mu">📅 до ${m.deadline}</span>` : ""}
+                ${m.assignee ? `<span class="mu">👤 ${m.assignee}</span>` : ""}
+                <button class="b g s" style="color:var(--dn);border-color:var(--dn);padding:2px 8px;font-size:12px" title="Удалить задачу" onclick="deleteMilestone(${v.id}, ${idx})">✕</button>
+              </div>
+            </div>
+          `).join("") : '<p class="mu" style="font-style:italic">Индивидуальных задач пока нет. Вы можете добавить первую контрольную точку ниже.</p>'}
+        </div>
+
+        <div style="margin-top:14px;background:var(--in);border-radius:6px;padding:12px">
+          <div style="font-weight:600;margin-bottom:8px;font-size:13px">➕ Добавить контрольную точку / задачу вуза:</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <input id="new_milestone_text_${v.id}" placeholder="Например: Согласовать доп. соглашение с юридическим отделом" style="flex:3;min-width:220px">
+            <input id="new_milestone_date_${v.id}" type="date" aria-label="Срок" style="flex:1;min-width:130px">
+            <select id="new_milestone_assignee_${v.id}" style="flex:1;min-width:140px;width:auto">
+              ${MANAGERS.map((m) => `<option value="${m}" ${m === v.manager ? "selected" : ""}>${m}</option>`).join("")}
+            </select>
+            <button class="b" onclick="addMilestone(${v.id})">Добавить задачу</button>
+          </div>
+        </div>
+      </div>
     `;
   }
 
@@ -1002,12 +1146,12 @@ function workflowView() {
   return `
     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:12px">
       <h1 style="margin:0">Канбан Workflow (${STAGES.length} этапов)</h1>
-      ${ROLES[role] >= 2 ? `
+      ${ROLES[role] >= 1 ? `
         <div style="display:flex;gap:8px">
           <button class="b" onclick="openAddStageModal()" style="display:inline-flex;align-items:center;gap:6px">
             ➕ Добавить этап
           </button>
-          <button class="b g" onclick="navigate('/settings')" style="display:inline-flex;align-items:center;gap:6px">
+          <button class="b g" onclick="location.hash='#/admin'" style="display:inline-flex;align-items:center;gap:6px">
             ⚙️ Настройка этапов
           </button>
         </div>
@@ -1663,6 +1807,7 @@ const VIEWS = {
   catalogs: catalogsView,
   integ: integrationsView,
   admin: adminView,
+  settings: adminView,
   docs: docsView
 };
 

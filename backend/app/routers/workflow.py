@@ -11,7 +11,7 @@ import os
 import shutil
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form, Request, status
-from sqlalchemy import select, update, delete
+from sqlalchemy import select, update, delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -79,12 +79,12 @@ async def update_stage(
     return stage
 
 
-@router.post("/stages", response_model=StageOut, summary="Создать новый этап workflow (Admin+)")
+@router.post("/stages", response_model=StageOut, summary="Создать новый этап workflow (Head/Admin)")
 async def create_stage(
     data: StageBase,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_admin),
+    current_user: User = Depends(require_head),
 ):
     max_order = await db.scalar(select(func.max(WorkflowStage.order)))
     new_order = (max_order + 1) if max_order is not None else 0
@@ -110,12 +110,12 @@ async def create_stage(
     return new_stage
 
 
-@router.delete("/stages/{stage_id}", summary="Деактивировать этап workflow (Admin+)")
+@router.delete("/stages/{stage_id}", summary="Деактивировать этап workflow (Head/Admin)")
 async def delete_stage(
     stage_id: int,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_admin),
+    current_user: User = Depends(require_head),
 ):
     stage = await db.get(WorkflowStage, stage_id)
     if not stage:
